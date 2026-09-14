@@ -1,23 +1,27 @@
-require('dotenv').config();
 const { Sequelize } = require('sequelize');
-const env = process.env.NODE_ENV || 'development';
-const config = require('../configs/config')[env];
+const config = require('./config');
+const logger = require('pino')({ level: config.app.LOG_LEVEL });
 
-if (!config) throw new Error(`No configuration found for environment: ${env}`);
-if (!config.database || !config.username || !config.password || !config.host) throw new Error(`Missing required database configuration for environment: ${env}`);
+const env = process.env.NODE_ENV || 'development';
+const dbConfig = config[env];
+
+if (!dbConfig) throw new Error(`No database configuration found for environment: ${env}`);
+if (!dbConfig.database || !dbConfig.username || !dbConfig.password || !dbConfig.host)
+    throw new Error(`Missing required database configuration for environment: ${env}`);
 
 const sequelize = new Sequelize(
-    config.database,
-    config.username,
-    config.password,
+    dbConfig.database,
+    dbConfig.username,
+    dbConfig.password,
     {
-        host: config.host,
-        dialect: config.dialect,
+        host: dbConfig.host,
+        dialect: dbConfig.dialect,
+        logging: false,
     }
 );
 
 sequelize.authenticate()
-    .then(() => console.log('Database has been connected successfully.'))
-    .catch((err) => console.log('Error: ' + err));
+    .then(() => logger.info('PostgreSQL connected successfully'))
+    .catch((err) => logger.error({ error: err.message }, 'PostgreSQL connection failed'));
 
 module.exports = sequelize;
