@@ -1,0 +1,421 @@
+---
+description: Coding conventions and architecture rules for the notifications-service Node.js/Express/RabbitMQ service
+globs: ["src/**/*.js", "scripts/**/*.js"]
+alwaysApply: true
+---
+
+# notifications-service — Agent Rules
+
+This file provides guidance for AI coding agents working on the Notifications Service — a standalone, event-driven microservice that consumes RabbitMQ events and delivers transactional emails.
+
+---
+
+## Tech Stack
+
+| Concern | Choice |
+| --- | --- |
+| **Runtime** | Node.js ≥ 20 LTS |
+| **HTTP framework** | Express.js (management API only) |
+| **Message broker client** | `amqplib` (low-level AMQP 0-9-1 — no wrapper library) |
+| **Validation** | `express-validator` (HTTP API query params); `joi` (consumer message schema) |
+| **Database / ORM** | PostgreSQL via `sequelize` + `sequelize-cli` (migrations) |
+| **Email transport** | `nodemailer` (Mailtrap SMTP for dev) |
+| **Email templates** | `handlebars` (.hbs files, loaded from disk at startup) |
+| **QR code generation** | `qrcode` (ticket confirmation attachment) |
+| **Logging** | `pino` (structured JSON — never use console.log in production paths) |
+| **Environment config** | `dotenv` |
+| **IDs** | `uuid` |
+| **Testing** | Jest + Supertest + `@faker-js/faker` |
+| **Process manager** | `nodemon` (dev), `node` (prod) |
+
+> **No auth.** This is an internal service — no JWT, no `isUserAuthenticated`, no `bcryptjs`.
+> **No Redis.** `ioredis` is not used in this service.
+
+---
+
+## Two Entry Points
+
+This service has two distinct entry points, each a separate long-running process:
+
+| Command | What it starts |
+| --- | --- |
+| `node src/consumer/index.js` | RabbitMQ consumer worker — connects to AMQP, starts consuming |
+| `node src/index.js` | HTTP management API — Express on `PORT` (default 3001) |
+| `docker-compose up` | Both processes + existing dev-infra RabbitMQ + PostgreSQL |
+
+The consumer and the HTTP API are separate services in Docker Compose. Neither imports the other's entry point. They share `src/configs/`, `src/models/`, and `src/utils/`.
+
+---
+
+## Repository Layout
+
+```
+src/
+  index.js                            # Express app entry point — registers routes, middleware, starts server
+  app/
+    controllers/                      # Route controller functions (*-controller.js)
+    middlewares/                      # Feature-level middleware arrays (*-middlewares.js)
+    routes/                           # Express Router definitions (*-routes.js)
+  configs/
+    config.js                         # Environment-aware app config (reads from process.env)
+    sequelize.js                      # Sequelize instance
+    rabbitmq.js                       # amqplib connection + channel; asserts topology on startup
+  consumer/
+    index.js                          # Connects to AMQP, binds queue, starts consuming
+    eventHandler.js                   # Parses + validates message; routes by eventType
+    handlers/
+      userRegistered.js
+      userFollowed.js
+      postLiked.js
+      postCommented.js
+      ticketPurchased.js
+  email/
+    sender.js                         # Nodemailer transport + sendEmail() function
+    renderer.js                       # Handlebars compile + render(templateName, context)
+    templates/
+      welcome.hbs
+      new-follower.hbs
+      post-liked.hbs
+      post-commented.hbs
+      ticket-confirmation.hbs
+  models/
+    notification-log.js               # sequelize.define(...) — the only model
+  migrations/                         # Sequelize-CLI migrations
+  repositories/
+    notification-repository.js        # All DB reads/writes for NotificationLog
+  tests/
+    setup.js                          # globalSetup — creates test DB, runs migrations
+    teardown.js                       # globalTeardown — drops test DB
+    setupFilesAfterEnv.js             # afterAll — closes sequelize connection
+    unit/
+      handlers/                       # One test file per handler (mocked sender + renderer)
+    integration/
+      api/                            # Supertest tests for HTTP endpoints
+  utils/
+    exceptions/
+      custom-exceptions.js            # Custom error classes
+      exception-handler.js            # Global Express error handler + handleBadRequests helper
+    serializers/
+      notification-serializer.js
+    validators/
+      notification-validators.js      # express-validator chains for HTTP API query params
+    responses.js                      # ApiResponse class
+scripts/
+  produce-event.js                    # CLI: publishes a test event to RabbitMQ
+  replay-event.js                     # CLI: re-publishes a failed eventId from the log
+```
+
+---
+
+## Architecture Rules
+
+1. **Consumer is the core** — the HTTP API is a secondary operational surface. The consumer is where the primary business logic lives.
+2. **Thin event handlers** — each handler in `consumer/handlers/` does exactly: build email context, call `renderer.render()`, call `sender.sendEmail()`, update the `NotificationLog`. No AMQP logic inside handlers.
+3. **`eventHandler.js` owns routing** — it parses the message body, runs Joi schema validation, checks idempotency, creates the pending log row, then delegates to the correct handler by `eventType`. Handlers receive the validated `payload` and the `log` instance — they never touch `channel` or `msg` directly.
+4. **`sender` and `renderer` are imported at the top of handler files** — `amqplib` and `nodemailer` are never required inside handler files. This keeps them independently testable.
+5. **Repositories own data access** — no handler, controller, or service queries Sequelize models directly. All DB reads/writes go through `src/repositories/notification-repository.js`, called via namespace: `const notificationRepository = require('...')`.
+6. **`rabbitmq.js` owns topology** — `assertExchange`, `assertQueue`, `bindQueue` are called once in `src/configs/rabbitmq.js` on every connection. They are idempotent and safe to re-run on restart.
+7. **Global error handler** — `exceptionHandler` from `src/utils/exceptions/exception-handler.js` is registered as the last middleware in `src/index.js`. HTTP controllers call `next(error)` and never send error responses directly.
+8. **No secrets in code** — all config values come from `process.env` via `src/configs/config.js`. Never read `process.env` directly in consumer, handler, or controller files.
+9. **Delivery > logging** — if writing to `notification_log` fails, log the error but do not nack the message. Email delivery takes priority over the audit log.
+10. **Templates must load at startup** — if any `.hbs` template file is missing, the consumer must fail fast and not start.
+
+---
+
+## RabbitMQ Topology
+
+All topology is declared in `src/configs/rabbitmq.js` using `assertExchange` / `assertQueue` / `bindQueue`. Every declaration is idempotent — safe to run on every startup.
+
+| Component | Name | Type / Config |
+| --- | --- | --- |
+| Exchange | `app.events` | Topic, durable |
+| Queue | `notifications.queue` | Durable, `x-dead-letter-exchange: app.events.dlx` |
+| Binding | `app.events` → `notifications.queue` | Routing keys: `user.#` and `post.#` |
+| DL Exchange | `app.events.dlx` | Direct, durable |
+| DL Queue | `notifications.dlq` | Durable |
+
+### Routing Keys
+
+| Routing Key | Email Triggered |
+| --- | --- |
+| `user.registered` | Welcome email |
+| `user.followed` | New follower notification |
+| `post.liked` | Post liked notification |
+| `post.commented` | Post commented notification |
+| `event.ticket_purchased` | Ticket confirmation with QR attachment |
+
+---
+
+## Message Acknowledgement
+
+The consumer uses **manual acknowledgements** (`noAck: false`). Never auto-ack.
+
+| Outcome | Action |
+| --- | --- |
+| Email sent successfully | `channel.ack(msg)` |
+| Transient failure (SMTP timeout) | Re-publish with incremented `x-retry-count` + backoff TTL; `channel.ack(msg)` original |
+| Permanent failure (max retries exhausted) | `channel.nack(msg, false, false)` → DLQ |
+| Invalid / malformed message | `channel.nack(msg, false, false)` → DLQ immediately |
+
+---
+
+## Idempotency Pattern
+
+Before any processing, check whether `eventId` already exists in `notification_log`. If it does, ack and skip.
+
+```js
+const existing = await notificationRepository.findLogByEventId(eventId);
+if (existing) {
+    logger.warn({ eventId }, 'Duplicate event received — skipping');
+    channel.ack(msg);
+    return;
+}
+```
+
+---
+
+## Validation
+
+### Consumer — Joi Schema Checks
+
+`express-validator` is HTTP middleware and cannot be used inside the RabbitMQ consumer. Consumer message validation is done with Joi in `src/consumer/eventHandler.js`. If validation fails, immediately `nack(false, false)` to DLQ.
+
+### HTTP API — express-validator
+
+Query param validation for the HTTP management API lives in `src/utils/validators/notification-validators.js`.
+
+```js
+const { query } = require('express-validator');
+
+const statusQueryValidator = query('status')
+    .optional()
+    .isIn(['pending', 'sent', 'failed']).withMessage('Status must be pending, sent, or failed.');
+```
+
+The `handleBadRequests(errorMessage)` helper is placed in middleware arrays after `express-validator` chains.
+
+---
+
+## Logging — Pino
+
+Use `pino` for all logging. Every log entry is a JSON object. **Never use `console.log` in production code paths.**
+
+```js
+const config = require('../configs/config');
+const logger = require('pino')({ level: config.app.LOG_LEVEL || 'info' });
+
+logger.info({ eventId, eventType, recipient: recipientEmail }, 'Email delivered');
+logger.warn({ eventId, retryCount, error: err.message }, 'Email delivery failed — retrying');
+logger.error({ eventId, retryCount }, 'Max retries exceeded — routing to DLQ');
+```
+
+Every consumer log entry must include `eventId` and `eventType`. Every delivery outcome log must include `status`.
+
+---
+
+## Sequelize Model
+
+One model only — `src/models/notification-log.js`. Use `sequelize.define(...)` directly — **not** the factory pattern. No `associations.js` needed.
+
+```js
+const { DataTypes } = require('sequelize');
+const sequelize = require('../configs/sequelize');
+
+const NotificationLog = sequelize.define('NotificationLog', {
+    id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+    eventId: { type: DataTypes.UUID, allowNull: false, unique: true },
+    eventType: { type: DataTypes.STRING(100), allowNull: false },
+    recipientEmail: { type: DataTypes.STRING(255), allowNull: false },
+    recipientName: { type: DataTypes.STRING(255), allowNull: true },
+    status: {
+        type: DataTypes.ENUM('pending', 'sent', 'failed'),
+        allowNull: false,
+        defaultValue: 'pending',
+    },
+    failureReason: { type: DataTypes.TEXT, allowNull: true },
+    retryCount: { type: DataTypes.SMALLINT, allowNull: false, defaultValue: 0 },
+    processedAt: { type: DataTypes.DATE, allowNull: true },
+}, {
+    tableName: 'notification_log',
+    indexes: [
+        { name: 'idx_notification_log_eventId', fields: ['eventId'], unique: true },
+        { name: 'idx_notification_log_status', fields: ['status'] },
+        { name: 'idx_notification_log_eventType', fields: ['eventType'] },
+    ],
+});
+
+module.exports = { NotificationLog };
+```
+
+---
+
+## Data Access — Repository
+
+`src/repositories/notification-repository.js` is the **only** place that imports and queries `NotificationLog`. Always call through the namespace object — never destructure.
+
+```js
+const notificationRepository = require('../../repositories/notification-repository');
+
+await notificationRepository.findLogByEventId(eventId);
+await notificationRepository.createLog({ eventId, eventType, recipientEmail, status: 'pending' });
+await notificationRepository.updateLog(id, { status: 'sent', processedAt: new Date() });
+```
+
+---
+
+## API Response Conventions
+
+All HTTP responses use the `ApiResponse` shape from `src/utils/responses.js`:
+
+```json
+{ "status": "success", "message": "...", "data": { ... } }
+```
+
+### HTTP Status Codes
+
+| Code | When Used |
+| --- | --- |
+| `200 OK` | Successful read |
+| `400 Bad Request` | Invalid query params |
+| `404 Not Found` | `eventId` does not exist in the log |
+| `409 Conflict` | Replay attempted on a non-failed notification |
+| `500 Internal Server Error` | Unhandled exception |
+
+---
+
+## Custom Exceptions
+
+Only the subset relevant to the HTTP management API:
+
+| Class | Status | When to throw |
+| --- | --- | --- |
+| `BadRequest` | 400 | Invalid query params |
+| `NotFound` | 404 | `eventId` not in notification log |
+| `Conflict` | 409 | Replay on a non-failed notification |
+
+**Rule:** whenever a new exception class is added, a matching `instanceof` block must be added to `exceptionHandler`.
+
+---
+
+## API Response Serializers
+
+`src/utils/serializers/notification-serializer.js` transforms `NotificationLog` instances into API-safe objects. **Controllers only** — never call serializers from repositories or middleware.
+
+```js
+const notificationSerializer = require('../../utils/serializers/notification-serializer');
+
+apiResponse.data = notificationSerializer.serializeNotification(log);
+```
+
+---
+
+## Routing Conventions
+
+- All API routes are versioned under `/api/v1/`.
+- Route ordering matters: mount `/api/v1/notifications/stats` **before** `/api/v1/notifications/:eventId`.
+- No authentication middleware — this is an internal service.
+
+---
+
+## Testing Guidelines
+
+### Test Types
+
+| Type | Tool | What it tests |
+| --- | --- | --- |
+| **Unit** | Jest | Individual handler logic — `sender` and `renderer` are mocked |
+| **Integration** | Supertest + Jest | Full HTTP request → controller → DB → serialized response |
+
+The consumer worker is not tested end-to-end against a real RabbitMQ. Handlers are unit-tested with mocked dependencies. The HTTP API is integration-tested against a real PostgreSQL test DB.
+
+### Unit Test Pattern (Handler)
+
+```js
+describe('userRegistered handler', () => {
+    let mockSender, mockRenderer, mockLog;
+
+    beforeEach(() => {
+        mockRenderer = { render: jest.fn().mockReturnValue('<html>...</html>') };
+        mockSender = { sendEmail: jest.fn().mockResolvedValue({ messageId: 'abc' }) };
+        mockLog = { id: 'log-uuid' };
+    });
+
+    it('should call renderer with correct template and context', async () => { ... });
+    it('should call sender with correct to, subject, and html', async () => { ... });
+    it('should propagate errors thrown by sender', async () => { ... });
+});
+```
+
+### Integration Test Pattern (HTTP API)
+
+```js
+describe('GET /api/v1/notifications', () => {
+    beforeAll(async () => {
+        // Seed NotificationLog rows directly using the model
+    });
+
+    afterAll(async () => {
+        await NotificationLog.destroy({ where: { ... }, force: true });
+    });
+
+    it('should return 200 with paginated notification list', async () => { ... });
+    it('should filter by status=failed', async () => { ... });
+    it('should call next() with an error if any exception is thrown', async () => { ... });
+});
+```
+
+### Coverage Expectations
+
+**Unit tests (per handler):**
+- Correct template name and context passed to `renderer.render`
+- Correct `to`, `subject`, and `html` passed to `sender.sendEmail`
+- Errors from `sender` are propagated (not swallowed)
+
+**Integration tests (per endpoint):**
+- Success: correct shape and data returned
+- Invalid query params: 400
+- Not found: 404 (where applicable)
+- Error propagation: direct controller call with empty `req`
+
+---
+
+## Pull Requests & Commits
+
+- Follow **Conventional Commits**: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`.
+- Keep commits small and focused — one concern per commit.
+- Run `npm test` locally before opening a PR.
+- Never force-push to `main`.
+
+---
+
+## Useful Commands
+
+```bash
+node src/consumer/index.js                                     # Start the consumer worker
+node src/index.js                                              # Start the HTTP management API
+docker-compose up --build                                      # Start everything
+npx sequelize-cli db:migrate                                   # Run pending migrations
+npx sequelize-cli migration:generate --name <description>      # Create a new migration
+npm test                                                       # Run all tests
+node scripts/produce-event.js --event user.registered          # Publish a test event
+node scripts/replay-event.js --eventId <uuid>                  # Replay a failed event
+```
+
+---
+
+## Things Agents Must NOT Do
+
+- Add AMQP logic (`channel.ack`, `channel.nack`, `channel.publish`) inside handler files.
+- Call `nodemailer` or `amqplib` directly inside handler files — use `sender` and `renderer`.
+- Read `process.env` directly in handlers, controllers, or repositories — use `src/configs/config.js`.
+- Import or query a Sequelize model from anywhere other than `src/repositories/notification-repository.js`.
+- Destructure functions from a repository import — always call through the namespace object.
+- Define a Sequelize model using the factory pattern — use `sequelize.define(...)` directly.
+- Call a serializer from anywhere other than a controller.
+- Swallow errors silently in handlers — always update the log and nack/ack appropriately.
+- Use `console.log` in production code paths — use Pino.
+- Add auth middleware to the HTTP API — this is an internal service, no auth required.
+- Immediately requeue a message without incrementing `x-retry-count` — this creates a tight loop.
+- Skip the idempotency check — always check `notification_log` for `eventId` before processing.
+- Start the consumer if any template fails to load at startup — fail fast.
+- Declare Sequelize associations — there is only one model, no associations are needed.
