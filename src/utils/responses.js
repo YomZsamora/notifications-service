@@ -1,13 +1,19 @@
-const ERROR_STATUS = "error";
-const SUCCESS_STATUS = "success";
-
 class ApiResponse {
 
-    constructor() {
-        this.status = SUCCESS_STATUS;
-        this.message = "";
-        this.data = null;
+    constructor(statusCode, message, data = null) {
+        this.statusCode = statusCode;
+        this.status = 'success';
+        this.message = message;
+        this.data = data;
+    }
+
+    toJSON() {
+        return {
+            status: this.status,
+            message: this.message,
+            data: this.data,
+        };
     }
 }
 
-module.exports = { ApiResponse, ERROR_STATUS, SUCCESS_STATUS };
+module.exports = { ApiResponse };
