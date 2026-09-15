@@ -10,7 +10,7 @@ const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 16000];
 
 const assertTopology = async (ch) => {
     await ch.assertExchange(config.app.EXCHANGE_NAME, 'topic', { durable: true });
-    await ch.assertExchange(config.app.DLX_NAME, 'direct', { durable: true });
+    await ch.assertExchange(config.app.DLX_NAME, 'fanout', { durable: true });
 
     await ch.assertQueue(config.app.QUEUE_NAME, {
         durable: true,
@@ -18,6 +18,7 @@ const assertTopology = async (ch) => {
     });
 
     await ch.assertQueue(config.app.DLQ_NAME, { durable: true });
+    await ch.bindQueue(config.app.DLQ_NAME, config.app.DLX_NAME, '');
 
     await ch.bindQueue(config.app.QUEUE_NAME, config.app.EXCHANGE_NAME, 'user.#');
     await ch.bindQueue(config.app.QUEUE_NAME, config.app.EXCHANGE_NAME, 'post.#');
