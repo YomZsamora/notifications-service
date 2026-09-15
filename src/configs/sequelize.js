@@ -1,6 +1,5 @@
 const { Sequelize } = require('sequelize');
 const config = require('./config');
-const logger = require('pino')({ level: config.app.LOG_LEVEL });
 
 const env = process.env.NODE_ENV || 'development';
 const dbConfig = config[env];
@@ -19,9 +18,5 @@ const sequelize = new Sequelize(
         logging: false,
     }
 );
-
-sequelize.authenticate()
-    .then(() => logger.info('PostgreSQL connected successfully'))
-    .catch((err) => logger.error({ error: err.message }, 'PostgreSQL connection failed'));
 
 module.exports = sequelize;
