@@ -1,87 +1,32 @@
-'use strict';
-
+const config = require('../../configs/config');
+const { BadRequest } = require('./custom-exceptions');
 const { validationResult } = require('express-validator');
-const { ApiResponse, ERROR_STATUS } = require('../responses');
-const {
-    BadRequest,
-    NotFound,
-    Conflict,
-    NotAuthenticated,
-    PermissionDenied,
-    TokenExpired,
-    InvalidJsonWebToken,
-    TokenReuseDetected,
-} = require('./custom-exceptions');
+const logger = require('pino')({ level: config.app.LOG_LEVEL });
 
-const exceptionHandler = (err, req, res, _next) => {
-    const apiResponse = new ApiResponse();
-    apiResponse.status = ERROR_STATUS;
-    apiResponse.message = err.message || 'Internal Server Error';
-    apiResponse.data = err.errors || {};
-    let statusCode = err.statusCode || 500;
-
-    if (err instanceof BadRequest) {
-        statusCode = err.statusCode;
-        apiResponse.message = err.message;
-        apiResponse.data = err.errors;
+const handleBadRequests = (errorMessage) => (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return next(new BadRequest(errorMessage || errors.array()[0].msg));
     }
-
-    if (err instanceof NotFound) {
-        statusCode = err.statusCode;
-        apiResponse.message = err.message;
-    }
-
-    if (err instanceof Conflict) {
-        statusCode = err.statusCode;
-        apiResponse.message = err.message;
-    }
-
-    if (err instanceof NotAuthenticated) {
-        statusCode = err.statusCode;
-        apiResponse.message = err.message;
-    }
-
-    if (err instanceof PermissionDenied) {
-        statusCode = err.statusCode;
-        apiResponse.message = err.message;
-    }
-
-    if (err instanceof TokenExpired) {
-        statusCode = err.statusCode;
-        apiResponse.message = err.message;
-    }
-
-    if (err instanceof InvalidJsonWebToken) {
-        statusCode = err.statusCode;
-        apiResponse.message = err.message;
-    }
-
-    if (err instanceof TokenReuseDetected) {
-        statusCode = err.statusCode;
-        apiResponse.message = err.message;
-    }
-
-    return res.status(statusCode).json(apiResponse);
+    next();
 };
 
-const formatExceptions = (errors) => {
-    return Object.fromEntries(
-        Object.entries(errors.mapped()).map(([field, error]) => [field, error.msg])
-    );
+const exceptionHandler = (err, req, res, next) => {
+
+    const statusCode = err.statusCode || 500;
+    const isOperational = err.isOperational || false;
+
+    if (isOperational) {
+        logger.warn({ statusCode, error: err.message, path: req.path }, 'Operational error');
+    } else {
+        logger.error({ statusCode, error: err.message, stack: err.stack, path: req.path }, 'Unexpected error');
+    }
+
+    res.status(statusCode).json({
+        status: 'error',
+        message: isOperational ? err.message : 'An unexpected error occurred',
+        data: null,
+    });
 };
 
-const handleBadRequests = (errorMessage = 'Validation failed.') => {
-    return (req, res, next) => {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            throw new BadRequest(errorMessage, formatExceptions(errors));
-        }
-        next();
-    };
-};
-
-module.exports = {
-    exceptionHandler,
-    formatExceptions,
-    handleBadRequests,
-};
+module.exports = { handleBadRequests, exceptionHandler };
