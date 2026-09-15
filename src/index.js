@@ -1,32 +1,39 @@
-const cors = require('cors');
-require('./configs/sequelize');
+require('dotenv').config();
 const express = require('express');
-const dotenv = require('dotenv');
+const config = require('./configs/config');
+const { connect } = require('./configs/rabbitmq');
+const logger = require('pino')({ level: config.app.LOG_LEVEL });
+const notificationsRouter = require('./app/routes/notifications-routes');
+const { health } = require('./app/controllers/notifications-controller');
 const { exceptionHandler } = require('./utils/exceptions/exception-handler');
 
-dotenv.config();
-
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-app.use(cors());
 app.use(express.json());
 
-// Health check route
-app.get('/health', (req, res) => {
-    res.send('The Notifications Service is running.')
-});
+app.get('/health', health);
+app.use('/api/v1/notifications', notificationsRouter);
 
-// Protected routes
-
-
-// Exception handler
 app.use(exceptionHandler);
 
-if (require.main === module) {
-    app.listen(PORT, () => {
-        console.log(`Server is running on port ${PORT}`);
-    });
-}
+const start = async () => {
+    
+    await connect();
 
-module.exports = app;
+    const server = app.listen(config.app.PORT, () => {
+        logger.info({ port: config.app.PORT }, 'HTTP API started');
+    });
+
+    process.on('SIGTERM', async () => {
+        logger.info('SIGTERM received — shutting down gracefully');
+        server.close(() => {
+            logger.info('HTTP server closed');
+            process.exit(0);
+        });
+    });
+};
+
+start().catch((err) => {
+    logger.fatal({ error: err.message }, 'HTTP API failed to start — exiting');
+    process.exit(1);
+});
