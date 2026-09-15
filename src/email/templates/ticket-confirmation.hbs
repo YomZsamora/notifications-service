@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Your ticket for {{eventName}}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f4f4f4;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background-color:#ffffff;border-radius:8px;overflow:hidden;">
+
+          <tr>
+            <td style="background-color:#4F46E5;padding:32px 40px;text-align:center;">
+              <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:bold;">{{appName}}</h1>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:40px;">
+              <h2 style="margin:0 0 8px;color:#111827;font-size:20px;">Your ticket is confirmed</h2>
+              <p style="margin:0 0 32px;color:#374151;font-size:16px;line-height:26px;">
+                Hi {{recipientName}}, you're going to <strong>{{eventName}}</strong>.
+              </p>
+
+              <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 32px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+                <tr>
+                  <td style="padding:20px 24px;border-bottom:1px solid #e5e7eb;">
+                    <p style="margin:0 0 4px;color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;">Event</p>
+                    <p style="margin:0;color:#111827;font-size:16px;font-weight:bold;">{{eventName}}</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:20px 24px;border-bottom:1px solid #e5e7eb;">
+                    <p style="margin:0 0 4px;color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;">Date</p>
+                    <p style="margin:0;color:#111827;font-size:16px;">{{eventDate}}</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:20px 24px;border-bottom:1px solid #e5e7eb;">
+                    <p style="margin:0 0 4px;color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;">Venue</p>
+                    <p style="margin:0;color:#111827;font-size:16px;">{{eventVenue}}</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:20px 24px;">
+                    <p style="margin:0 0 4px;color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;">Ticket Code</p>
+                    <p style="margin:0;color:#111827;font-size:18px;font-weight:bold;letter-spacing:0.1em;">{{ticketCode}}</p>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:0 0 16px;color:#374151;font-size:15px;text-align:center;">
+                Present this QR code at the venue entrance:
+              </p>
+              <div style="text-align:center;margin:0 0 32px;">
+                <img src="cid:ticket-qr" alt="Ticket QR Code" width="180" height="180" style="display:inline-block;border:1px solid #e5e7eb;border-radius:8px;padding:8px;">
+              </div>
+
+              <a href="{{appUrl}}" style="display:inline-block;background-color:#4F46E5;color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:6px;font-size:16px;font-weight:bold;">
+                View My Tickets
+              </a>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background-color:#f9fafb;padding:24px 40px;border-top:1px solid #e5e7eb;text-align:center;">
+              <p style="margin:0 0 8px;color:#6b7280;font-size:13px;">
+                You received this because you purchased a ticket through {{appName}}.
+              </p>
+              <p style="margin:0;color:#6b7280;font-size:13px;">
+                <a href="{{appUrl}}/unsubscribe" style="color:#6b7280;text-decoration:underline;">Unsubscribe</a>
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
