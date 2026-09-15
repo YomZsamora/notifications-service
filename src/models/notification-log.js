@@ -44,7 +44,7 @@ const NotificationLog = sequelize.define('NotificationLog', {
         allowNull: true,
     },
 }, {
-    tableName: 'notification_logs',
+    tableName: 'notification_log',
     indexes: [
         { name: 'idx_notification_log_eventId', fields: ['eventId'], unique: true },
         { name: 'idx_notification_log_status', fields: ['status'] },
