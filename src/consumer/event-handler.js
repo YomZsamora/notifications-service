@@ -71,7 +71,7 @@ const eventHandler = async (channel, msg) => {
 
     let log;
     try {
-        const existing = await notificationRepository.findLogByEventId(eventId);
+        const existing = await notificationRepository.findLogByEventId(eventId); // Idempotency check
         if (existing) {
             if (retryCount === 0) {
                 logger.warn({ eventId }, 'Duplicate event received — skipping');
