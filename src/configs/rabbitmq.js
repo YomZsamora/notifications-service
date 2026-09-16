@@ -11,15 +11,15 @@ const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 16000];
 const assertTopology = async (ch) => {
     await ch.assertExchange(config.app.EXCHANGE_NAME, 'topic', { durable: true });
     await ch.assertExchange(config.app.DLX_NAME, 'fanout', { durable: true });
-
     await ch.assertQueue(config.app.QUEUE_NAME, {
         durable: true,
-        arguments: { 'x-dead-letter-exchange': config.app.DLX_NAME },
+        arguments: { 'x-dead-letter-exchange': config.app.DLX_NAME },  // When any message dies in this queue, route it to DLX_NAME instead of dropping it
     });
 
     await ch.assertQueue(config.app.DLQ_NAME, { durable: true });
     await ch.bindQueue(config.app.DLQ_NAME, config.app.DLX_NAME, '');
 
+    // These three bindings tell EXCHANGE_NAME which messages to route to QUEUE_NAME
     await ch.bindQueue(config.app.QUEUE_NAME, config.app.EXCHANGE_NAME, 'user.#');
     await ch.bindQueue(config.app.QUEUE_NAME, config.app.EXCHANGE_NAME, 'post.#');
     await ch.bindQueue(config.app.QUEUE_NAME, config.app.EXCHANGE_NAME, 'event.#');
