@@ -10,7 +10,8 @@
     "test": "jest",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
-    "format:check": "prettier --check src/"
+    "format:check": "prettier --check src/",
+    "format:fix": "prettier --write src/"
   },
   "keywords": [],
   "author": "",
