@@ -49,6 +49,7 @@ const eventHandler = async (channel, msg) => {
     
     if (!msg) return;
 
+    // Step 1 — Parse
     let envelope;
     try {
         envelope = JSON.parse(msg.content.toString());
@@ -58,6 +59,7 @@ const eventHandler = async (channel, msg) => {
         return;
     }
 
+    // Step 2 — Validate
     const validationError = validate(envelope);
     if (validationError) {
         logger.error({ error: validationError }, 'Invalid message envelope — routing to DLQ');
@@ -69,6 +71,7 @@ const eventHandler = async (channel, msg) => {
     const retryCount = (msg.properties.headers && msg.properties.headers['x-retry-count']) || 0;
     const { email: recipientEmail, name: recipientName } = getRecipient(eventType, payload);
 
+    // Step 3 — Idempotency Check + Retry Awareness
     let log;
     try {
         const existing = await notificationRepository.findLogByEventId(eventId); // Idempotency check
@@ -91,11 +94,13 @@ const eventHandler = async (channel, msg) => {
         return;
     }
 
+    // Step 4 — Route to Handler and Ack
     try {
         await handlers[eventType].handle(payload, log);
         channel.ack(msg);
         logger.info({ eventId, eventType, recipientEmail }, 'Message processed successfully');
     } catch (err) {
+        // Step 5 — Retry / DLQ
         logger.warn({ eventId, eventType, retryCount, error: err.message }, 'Email delivery failed');
 
         if (retryCount >= config.app.MAX_RETRIES) {
