@@ -28,6 +28,7 @@ describe('POST /api/v1/notifications/replay/:eventId', () => {
                 recipientName: faker.person.firstName(),
                 status: 'failed',
                 failureReason: 'SMTP timeout',
+                payload: { email: faker.internet.email(), name: faker.person.firstName() },
             },
             {
                 eventId: faker.string.uuid(),
