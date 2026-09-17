@@ -76,8 +76,13 @@ const eventHandler = async (channel, msg) => {
     try {
         const existing = await notificationRepository.findLogByEventId(eventId); // Idempotency check
         if (existing) {
-            if (retryCount === 0) {
-                logger.warn({ eventId }, 'Duplicate event received — skipping');
+            if (existing.status === 'sent') {
+                logger.warn({ eventId }, 'Duplicate event received — already delivered, skipping');
+                channel.ack(msg);
+                return;
+            }
+            if (retryCount === 0 && existing.status === 'pending') {
+                logger.warn({ eventId }, 'Duplicate event received — already pending, skipping');
                 channel.ack(msg);
                 return;
             }
@@ -85,7 +90,7 @@ const eventHandler = async (channel, msg) => {
             await notificationRepository.updateLog(log.id, { retryCount });
         } else {
             log = await notificationRepository.createLog({
-                eventId, eventType, recipientEmail, recipientName, status: 'pending',
+                eventId, eventType, recipientEmail, recipientName, status: 'pending', payload,
             });
         }
     } catch (dbErr) {
