@@ -7,22 +7,6 @@ const notificationSerializer = require('../../utils/serializers/notification-ser
 const { ApiResponse } = require('../../utils/responses');
 const { NotFound, Conflict, BadRequest } = require('../../utils/exceptions/custom-exceptions');
 
-const mapLogToPayload = (log) => {
-    switch (log.eventType) {
-        case 'user.registered':
-            return { email: log.recipientEmail, name: log.recipientName };
-        case 'user.followed':
-            return { followedUserEmail: log.recipientEmail, followedUserName: log.recipientName };
-        case 'post.liked':
-            return { postAuthorEmail: log.recipientEmail, postAuthorName: log.recipientName };
-        case 'post.commented':
-            return { postAuthorEmail: log.recipientEmail, postAuthorName: log.recipientName };
-        case 'event.ticket_purchased':
-            return { userEmail: log.recipientEmail, userName: log.recipientName };
-        default:
-            return {};
-    }
-};
 
 const list = async (req, res, next) => {
     try {
@@ -92,8 +76,12 @@ const replay = async (req, res, next) => {
             eventId: log.eventId,
             eventType: log.eventType,
             timestamp: new Date().toISOString(),
-            payload: mapLogToPayload(log),
+            payload: log.payload,
         }));
+
+        if (!log.payload) {
+            return next(new BadRequest('Cannot replay: original event payload was not stored.'));
+        }
 
         channel.publish(config.app.EXCHANGE_NAME, log.eventType, message, { persistent: true });
 
