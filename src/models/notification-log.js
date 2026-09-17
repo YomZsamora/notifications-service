@@ -43,6 +43,10 @@ const NotificationLog = sequelize.define('NotificationLog', {
         type: DataTypes.DATE,
         allowNull: true,
     },
+    payload: {
+        type: DataTypes.JSONB,
+        allowNull: true,
+    },
 }, {
     tableName: 'notification_log',
     indexes: [
