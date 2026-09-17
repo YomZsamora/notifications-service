@@ -3,7 +3,7 @@ const config = require('../configs/config');
 const eventHandler = require('./event-handler');
 const { loadTemplates } = require('../email/renderer');
 const logger = require('pino')({ level: config.app.LOG_LEVEL });
-const { connect, getChannel } = require('../configs/rabbitmq');
+const { connect, getChannel, getConnection } = require('../configs/rabbitmq');
 
 const start = async () => {
     
@@ -29,7 +29,7 @@ const start = async () => {
         logger.info('SIGTERM received — shutting down gracefully');
         await channel.cancel(consumerTag);
         await channel.close();
-        await getChannel()?.connection?.close();
+        await getConnection()?.close();
         process.exit(0);
     });
 };
