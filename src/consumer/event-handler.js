@@ -1,6 +1,6 @@
 const config = require('../configs/config');
 const { validate: isUuid } = require('uuid');
-const logger = require('pino')({ level: config.app.LOG_LEVEL });
+const logger = require('../configs/logger');
 const notificationRepository = require('../repositories/notification-repository');
 
 const handlers = {
