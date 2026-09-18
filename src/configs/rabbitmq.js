@@ -1,7 +1,6 @@
 const amqp = require('amqplib');
 const config = require('./config');
-
-const logger = require('pino')({ level: config.app.LOG_LEVEL });
+const logger = require('./logger');
 
 let connection = null;
 let channel = null;
