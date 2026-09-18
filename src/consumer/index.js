@@ -2,7 +2,7 @@ require('dotenv').config();
 const config = require('../configs/config');
 const eventHandler = require('./event-handler');
 const { loadTemplates } = require('../email/renderer');
-const logger = require('pino')({ level: config.app.LOG_LEVEL });
+const logger = require('../configs/logger');
 const { connect, getChannel, getConnection } = require('../configs/rabbitmq');
 
 const start = async () => {
