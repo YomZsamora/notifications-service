@@ -12,7 +12,7 @@ const assertTopology = async (ch) => {
     await ch.assertExchange(config.app.DLX_NAME, 'fanout', { durable: true });
     await ch.assertQueue(config.app.QUEUE_NAME, {
         durable: true,
-        arguments: { 'x-dead-letter-exchange': config.app.DLX_NAME },  // When any message dies in this queue, route it to DLX_NAME instead of dropping it
+        arguments: { 'x-dead-letter-exchange': config.app.DLX_NAME }, // When any message dies in this queue, route it to DLX_NAME instead of dropping it
     });
 
     await ch.assertQueue(config.app.DLQ_NAME, { durable: true });
@@ -44,9 +44,11 @@ const connect = async (attempt = 0) => {
             channel = null;
             connect(0);
         });
-
     } catch (err) {
-        logger.warn({ attempt: attempt + 1, error: err.message }, 'RabbitMQ connection attempt failed');
+        logger.warn(
+            { attempt: attempt + 1, error: err.message },
+            'RabbitMQ connection attempt failed'
+        );
 
         if (attempt >= RECONNECT_DELAYS_MS.length) {
             logger.fatal('Max reconnect attempts reached — exiting');
