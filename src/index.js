@@ -1,7 +1,7 @@
 require('dotenv').config();
 const config = require('./configs/config');
 const { connect } = require('./configs/rabbitmq');
-const logger = require('pino')({ level: config.app.LOG_LEVEL });
+const logger = require('./configs/logger');
 const app = require('./app');
 
 const start = async () => {
