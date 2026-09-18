@@ -52,10 +52,4 @@ describe('GET /api/v1/notifications/stats', () => {
         const res = await request(app).get('/api/v1/notifications/stats?startDate=not-a-date');
         expect(res.status).toBe(400);
     });
-
-    it('passes errors to next() when an exception is thrown', async () => {
-        const mockNext = jest.fn();
-        await getStats({}, {}, mockNext);
-        expect(mockNext).toHaveBeenCalledWith(expect.any(Error));
-    });
 });

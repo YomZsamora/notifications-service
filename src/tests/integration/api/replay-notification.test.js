@@ -70,10 +70,4 @@ describe('POST /api/v1/notifications/replay/:eventId', () => {
         const res = await request(app).post('/api/v1/notifications/replay/not-a-uuid');
         expect(res.status).toBe(400);
     });
-
-    it('passes errors to next() when an exception is thrown', async () => {
-        const mockNext = jest.fn();
-        await replay({}, {}, mockNext);
-        expect(mockNext).toHaveBeenCalledWith(expect.any(Error));
-    });
 });

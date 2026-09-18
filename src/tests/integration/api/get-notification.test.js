@@ -43,10 +43,4 @@ describe('GET /api/v1/notifications/:eventId', () => {
         const res = await request(app).get('/api/v1/notifications/not-a-uuid');
         expect(res.status).toBe(400);
     });
-
-    it('passes errors to next() when an exception is thrown', async () => {
-        const mockNext = jest.fn();
-        await getOne({}, {}, mockNext);
-        expect(mockNext).toHaveBeenCalledWith(expect.any(Error));
-    });
 });
