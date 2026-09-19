@@ -310,6 +310,33 @@ const NotificationLog = sequelize.define('NotificationLog', {
 module.exports = { NotificationLog };
 ```
 
+### Model Field Format
+
+Use the **compact inline format**: each field on one line, all properties on that same line, with
+colons aligned for readability. This is the enforced convention — do not expand simple fields into
+multi-line blocks.
+
+```js
+// correct — compact inline
+id:           { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+code:         { type: DataTypes.STRING(20), allowNull: false, unique: true },
+expiresAt:    { type: DataTypes.DATE, allowNull: true },
+```
+
+```js
+// wrong — unnecessarily expanded
+id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true,
+},
+```
+
+Use the expanded multi-line format **only** when a field definition is genuinely complex — for
+example, a deeply nested `validate` block or a long composite `references` object — where the
+inline version would exceed a readable line length. This is a judgment call enforced at code
+review; there is no automated lint rule for it.
+
 > There is only one model. No `associations.js` is needed.
 
 ---
