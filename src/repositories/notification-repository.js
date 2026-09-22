@@ -2,13 +2,9 @@ const { Op } = require('sequelize');
 const sequelize = require('../configs/sequelize');
 const { NotificationLog } = require('../models/notification-log');
 
-const findLogByEventId = async (eventId) => {
-    return NotificationLog.findOne({ where: { eventId } });
-};
+const findLogByEventId = async (eventId) => NotificationLog.findOne({ where: { eventId } });
 
-const createLog = async (data) => {
-    return NotificationLog.create(data);
-};
+const createLog = async (data) => NotificationLog.create(data);
 
 const updateLog = async (id, updates) => {
     const [, [updated]] = await NotificationLog.update(updates, {
