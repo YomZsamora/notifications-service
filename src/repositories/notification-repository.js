@@ -14,7 +14,15 @@ const updateLog = async (id, updates) => {
     return updated || null;
 };
 
-const findAllLogs = async ({ status, eventType, startDate, endDate, page, pageSize }) => {
+const findAllLogs = async ({ 
+    status, 
+    eventType, 
+    startDate, 
+    endDate, 
+    page, 
+    pageSize 
+}) => {
+
     const where = {};
 
     if (status) where.status = status;
