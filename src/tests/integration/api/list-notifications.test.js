@@ -2,7 +2,6 @@ const app = require('../../../app');
 const request = require('supertest');
 const { faker } = require('@faker-js/faker');
 const { NotificationLog } = require('../../../models/notification-log');
-const { list } = require('../../../app/controllers/notifications-controller');
 
 describe('GET /api/v1/notifications', () => {
 
