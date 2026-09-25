@@ -2,7 +2,6 @@ const request = require('supertest');
 const { faker } = require('@faker-js/faker');
 const app = require('../../../app');
 const { NotificationLog } = require('../../../models/notification-log');
-const { getStats } = require('../../../app/controllers/notifications-controller');
 
 describe('GET /api/v1/notifications/stats', () => {
     let seededLogs = [];
