@@ -9,7 +9,6 @@ const { faker } = require('@faker-js/faker');
 const app = require('../../../app');
 const { NotificationLog } = require('../../../models/notification-log');
 const { getChannel } = require('../../../configs/rabbitmq');
-const { replay } = require('../../../app/controllers/notifications-controller');
 
 const mockChannel = { publish: jest.fn() };
 
