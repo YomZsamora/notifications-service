@@ -1,7 +1,7 @@
 const sender = require('../../email/sender');
 const config = require('../../configs/config');
-const renderer = require('../../email/renderer');
 const logger = require('../../configs/logger');
+const renderer = require('../../email/renderer');
 const notificationRepository = require('../../repositories/notification-repository');
 
 const handle = async (payload, log) => {
