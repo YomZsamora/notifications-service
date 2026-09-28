@@ -1,10 +1,10 @@
 const { validate: isUuid } = require('uuid');
 const config = require('../../configs/config');
-const { getChannel, getConnection } = require('../../configs/rabbitmq');
 const sequelize = require('../../configs/sequelize');
+const { ApiResponse } = require('../../utils/responses');
+const { getChannel, getConnection } = require('../../configs/rabbitmq');
 const notificationRepository = require('../../repositories/notification-repository');
 const notificationSerializer = require('../../utils/serializers/notification-serializer');
-const { ApiResponse } = require('../../utils/responses');
 const { NotFound, Conflict, BadRequest } = require('../../utils/exceptions/custom-exceptions');
 
 
