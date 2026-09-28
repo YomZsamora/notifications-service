@@ -1,6 +1,6 @@
-const handlebars = require('handlebars');
 const fs = require('fs');
 const path = require('path');
+const handlebars = require('handlebars');
 
 const templates = {};
 
