@@ -4,9 +4,9 @@ jest.mock('../../../configs/rabbitmq', () => ({
     getConnection: jest.fn(),
 }));
 
+const app = require('../../../app');
 const request = require('supertest');
 const { faker } = require('@faker-js/faker');
-const app = require('../../../app');
 const { NotificationLog } = require('../../../models/notification-log');
 const { getChannel } = require('../../../configs/rabbitmq');
 
