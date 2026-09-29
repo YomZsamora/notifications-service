@@ -1,9 +1,10 @@
+const app = require('../../../app');
 const request = require('supertest');
 const { faker } = require('@faker-js/faker');
-const app = require('../../../app');
 const { NotificationLog } = require('../../../models/notification-log');
 
 describe('GET /api/v1/notifications/:eventId', () => {
+    
     let seededLog;
 
     beforeAll(async () => {
