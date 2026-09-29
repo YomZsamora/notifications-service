@@ -2,7 +2,6 @@ const { DataTypes } = require('sequelize');
 const sequelize = require('../configs/sequelize');
 
 const NotificationLog = sequelize.define('NotificationLog', {
-
     id:             { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true, },
     eventId:        { type: DataTypes.UUID, allowNull: false, unique: true, },
     eventType:      { type: DataTypes.STRING(100), allowNull: false, },
