@@ -42,6 +42,7 @@ const findAllLogs = async ({
 };
 
 const getStats = async ({ startDate, endDate }) => {
+    
     const where = {};
 
     if (startDate || endDate) {
