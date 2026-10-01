@@ -1,7 +1,7 @@
 require('dotenv').config();
 const app = require('./app');
 const config = require('./configs/config');
-const logger = require('./configs/logger');
+const logger = require('./utils/logger');
 const { connect } = require('./configs/rabbitmq');
 
 const start = async () => {
