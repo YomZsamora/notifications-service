@@ -1,6 +1,6 @@
 const amqp = require('amqplib');
 const config = require('./config');
-const logger = require('./logger');
+const logger = require('../utils/logger');
 
 let connection = null;
 let channel = null;
