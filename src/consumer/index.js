@@ -1,6 +1,6 @@
 require('dotenv').config();
 const config = require('../configs/config');
-const logger = require('../configs/logger');
+const logger = require('../utils/logger');
 const eventHandler = require('./event-handler');
 const { loadTemplates } = require('../email/renderer');
 const { connect, getChannel, getConnection } = require('../configs/rabbitmq');
