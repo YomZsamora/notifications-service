@@ -1,5 +1,5 @@
 const config = require('../configs/config');
-const logger = require('../configs/logger');
+const logger = require('../utils/logger');
 const { validate: isUuid } = require('uuid');
 const notificationRepository = require('../repositories/notification-repository');
 
