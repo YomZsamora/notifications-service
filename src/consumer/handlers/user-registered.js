@@ -1,6 +1,6 @@
 const sender = require('../../email/sender');
 const config = require('../../configs/config');
-const logger = require('../../configs/logger');
+const logger = require('../../utils/logger');
 const renderer = require('../../email/renderer');
 const notificationRepository = require('../../repositories/notification-repository');
 
