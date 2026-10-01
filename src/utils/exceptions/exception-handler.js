@@ -1,6 +1,6 @@
 const { BadRequest } = require('./custom-exceptions');
 const { validationResult } = require('express-validator');
-const logger = require('../../configs/logger');
+const logger = require('../logger');
 
 const handleBadRequests = (errorMessage) => (req, res, next) => {
     const errors = validationResult(req);
