@@ -25,7 +25,10 @@ shared with the expense-tracker ecosystem are retained here; differences are cal
 | **Process manager** | `nodemon` (dev), `node` (prod) |
 
 > **No auth.** This is an internal service — no JWT, no `isUserAuthenticated`, no `bcryptjs`.
-> **No Redis.** `ioredis` is in the boilerplate `package.json` but is not used by this service — remove it.
+> **No Redis.** This service does not use Redis.
+
+> **File naming:** every file under `src/` and `scripts/` is **kebab-case** (`event-handler.js`,
+> `user-registered.js`, `notification-log.js`). Never camelCase a filename.
 
 ---
 
@@ -33,7 +36,8 @@ shared with the expense-tracker ecosystem are retained here; differences are cal
 
 ```
 src/
-  index.js                            # Express app entry point — registers routes, middleware, starts server
+  app.js                              # Express app factory — mounts routes + exceptionHandler, exports app
+  index.js                            # HTTP entry point — connects AMQP, starts the server, handles SIGTERM
   app/
     controllers/                      # Route controller functions (*-controller.js)
     middlewares/                      # Feature-level middleware arrays (*-middlewares.js)
@@ -44,13 +48,13 @@ src/
     rabbitmq.js                       # amqplib connection + channel; asserts topology on startup
   consumer/
     index.js                          # Connects to AMQP, binds queue, starts consuming
-    eventHandler.js                   # Parses + validates message; routes by eventType
+    event-handler.js                  # Parses + validates message; routes by eventType
     handlers/
-      userRegistered.js
-      userFollowed.js
-      postLiked.js
-      postCommented.js
-      ticketPurchased.js
+      user-registered.js
+      user-followed.js
+      post-liked.js
+      post-commented.js
+      ticket-purchased.js
   email/
     sender.js                         # Nodemailer transport + sendEmail() function
     renderer.js                       # Handlebars compile + render(templateName, context)
@@ -73,6 +77,7 @@ src/
     integration/
       api/                            # Supertest tests for HTTP endpoints
   utils/
+    logger.js                         # Shared Pino singleton — imported everywhere under src/
     exceptions/
       custom-exceptions.js            # Custom error classes
       exception-handler.js            # Global Express error handler + handleBadRequests helper
@@ -84,7 +89,13 @@ src/
 scripts/
   produce-event.js                    # CLI: publishes a test event to RabbitMQ
   replay-event.js                     # CLI: re-publishes a failed eventId from the log
+README.md                             # Service overview, Docker setup, CLI usage, env var table
 ```
+
+**`app.js` vs `index.js`** — `src/app.js` builds and exports the Express app (routes, JSON body
+parsing, `exceptionHandler` last). It starts no server and opens no connections, which is what makes
+it directly importable by Supertest in integration tests. `src/index.js` is the process entry point:
+it connects to RabbitMQ, calls `app.listen()`, and installs the SIGTERM handler.
 
 ---
 
@@ -96,10 +107,14 @@ This service has **two distinct entry points**, each a separate long-running pro
 | --- | --- |
 | `node src/consumer/index.js` | RabbitMQ consumer worker — connects to AMQP, starts consuming |
 | `node src/index.js` | HTTP management API — Express on `PORT` (default 3001) |
-| `docker-compose up` | Both processes + RabbitMQ + PostgreSQL |
+| `docker-compose up` | Both processes (`notifications-api`, `notifications-consumer`) |
 
 The consumer and the HTTP API are **separate services** in Docker Compose. Neither imports the other's
 entry point. They share `src/configs/`, `src/models/`, and `src/utils/`.
+
+> **RabbitMQ and PostgreSQL are not in this compose file.** They run as shared infrastructure on the
+> external `dev-infra` Docker network, which both services attach to. `docker-compose up` assumes that
+> network and those containers already exist. The API publishes on host port `3032` (`3032:3001`).
 
 ---
 
@@ -110,7 +125,7 @@ entry point. They share `src/configs/`, `src/models/`, and `src/utils/`.
 2. **Thin event handlers** — each handler in `consumer/handlers/` does exactly: build email context,
    call `renderer.render()`, call `sender.sendEmail()`, update the `NotificationLog`. No AMQP logic
    inside handlers.
-3. **`eventHandler.js` owns routing** — it parses the message body, runs schema validation, checks
+3. **`event-handler.js` owns routing** — it parses the message body, runs schema validation, checks
    idempotency, creates the pending log row, then delegates to the correct handler by `eventType`.
    Handlers receive the validated `payload` and the `log` instance — they never touch `channel` or
    `msg` directly.
@@ -121,9 +136,9 @@ entry point. They share `src/configs/`, `src/models/`, and `src/utils/`.
    directly. All DB reads/writes go through `src/repositories/notification-repository.js`, called via
    namespace: `const notificationRepository = require('...')`.
 6. **`rabbitmq.js` owns topology** — `assertExchange`, `assertQueue`, `bindQueue` are called once in
-   `src/config/rabbitmq.js` on every connection. They are idempotent and safe to re-run on restart.
+   `src/configs/rabbitmq.js` on every connection. They are idempotent and safe to re-run on restart.
 7. **Global error handler** — `exceptionHandler` from `src/utils/exceptions/exception-handler.js` is
-   registered as the last middleware in `src/index.js`. HTTP controllers call `next(error)` and never
+   registered as the last middleware in `src/app.js`. HTTP controllers call `next(error)` and never
    send error responses directly.
 8. **No secrets in code** — all config values come from `process.env` via `src/configs/config.js`.
    Never read `process.env` directly in consumer, handler, or controller files.
@@ -134,29 +149,44 @@ entry point. They share `src/configs/`, `src/models/`, and `src/utils/`.
 
 ## RabbitMQ Topology
 
-All topology is declared in `src/config/rabbitmq.js` using `assertExchange` / `assertQueue` /
-`bindQueue`. Every declaration is idempotent — safe to run on every startup.
+All topology is declared in `src/configs/rabbitmq.js` using `assertExchange` / `assertQueue` /
+`bindQueue`. Every declaration is idempotent — safe to run on every startup. **Every name comes from
+`config.app.*`** — never hardcode exchange or queue names in the topology assertion.
 
-| Component | Name | Type / Config |
+| Component | Name (env default) | Type / Config |
 | --- | --- | --- |
 | Exchange | `app.events` | Topic, durable |
 | Queue | `notifications.queue` | Durable, `x-dead-letter-exchange: app.events.dlx` |
-| Binding | `app.events` → `notifications.queue` | Routing keys: `user.#` and `post.#` |
-| DL Exchange | `app.events.dlx` | Direct, durable |
-| DL Queue | `notifications.dlq` | Durable |
+| Binding | `app.events` → `notifications.queue` | Routing keys: `user.#`, `post.#`, `event.#` |
+| DL Exchange | `app.events.dlx` | **Fanout**, durable |
+| DL Queue | `notifications.dlq` | Durable, bound to the DLX with routing key `''` |
 
 ```js
 // src/configs/rabbitmq.js — topology assertion pattern
-await channel.assertExchange('app.events', 'topic', { durable: true });
-await channel.assertExchange('app.events.dlx', 'direct', { durable: true });
-await channel.assertQueue('notifications.queue', {
+await ch.assertExchange(config.app.EXCHANGE_NAME, 'topic', { durable: true });
+await ch.assertExchange(config.app.DLX_NAME, 'fanout', { durable: true });
+await ch.assertQueue(config.app.QUEUE_NAME, {
     durable: true,
-    arguments: { 'x-dead-letter-exchange': 'app.events.dlx' },
+    arguments: { 'x-dead-letter-exchange': config.app.DLX_NAME },
 });
-await channel.assertQueue('notifications.dlq', { durable: true });
-await channel.bindQueue('notifications.queue', 'app.events', 'user.#');
-await channel.bindQueue('notifications.queue', 'app.events', 'post.#');
+
+await ch.assertQueue(config.app.DLQ_NAME, { durable: true });
+await ch.bindQueue(config.app.DLQ_NAME, config.app.DLX_NAME, '');
+
+await ch.bindQueue(config.app.QUEUE_NAME, config.app.EXCHANGE_NAME, 'user.#');
+await ch.bindQueue(config.app.QUEUE_NAME, config.app.EXCHANGE_NAME, 'post.#');
+await ch.bindQueue(config.app.QUEUE_NAME, config.app.EXCHANGE_NAME, 'event.#');
 ```
+
+> **Why fanout for the DLX, and why the explicit DLQ binding.** A direct exchange would route a
+> dead-lettered message by its *original* routing key (`user.registered`, `post.liked`, …), so the DLQ
+> would need a binding for every key or messages would be silently dropped. A fanout exchange ignores
+> routing keys and delivers to every bound queue, so one `''` binding catches everything. Dropping
+> either the fanout type or the `bindQueue` line makes failed messages vanish instead of landing in
+> the DLQ.
+
+> **The `event.#` binding is required** — `event.ticket_purchased` is routed by it. Without it, ticket
+> confirmation events are published successfully but never reach the consumer.
 
 ### Routing Keys
 
@@ -184,28 +214,31 @@ The consumer uses **manual acknowledgements** (`noAck: false`). Never auto-ack.
 ### Retry Pattern
 
 ```js
-const MAX_RETRIES = config.MAX_RETRIES; // read from env via config/env.js
-const RETRY_DELAY_MS = config.RETRY_DELAY_MS;
+const MAX_RETRIES = config.app.MAX_RETRIES; // read from env via configs/config.js
+const RETRY_DELAY_MS = config.app.RETRY_DELAY_MS;
 
-const retryCount = msg.properties.headers['x-retry-count'] || 0;
+const retryCount = (msg.properties.headers && msg.properties.headers['x-retry-count']) || 0;
 
 if (retryCount >= MAX_RETRIES) {
     await notificationRepository.updateLog(log.id, { status: 'failed', failureReason: err.message });
     channel.nack(msg, false, false); // → DLQ
 } else {
     channel.publish(
-        'app.events',
+        config.app.EXCHANGE_NAME,
         msg.fields.routingKey,
         msg.content,
         {
             ...msg.properties,
-            headers: { 'x-retry-count': retryCount + 1 },
+            headers: { ...msg.properties.headers, 'x-retry-count': retryCount + 1 },
             expiration: String(RETRY_DELAY_MS * (retryCount + 1)), // exponential backoff
         }
     );
     channel.ack(msg); // ack original; re-published copy carries the retry count
 }
 ```
+
+Spread `...msg.properties` so the re-published copy keeps `deliveryMode: 2` (persistent), and spread
+`...msg.properties.headers` so existing headers survive the retry.
 
 ---
 
@@ -214,7 +247,7 @@ if (retryCount >= MAX_RETRIES) {
 ### Consumer — Plain JS Schema Checks
 
 `express-validator` is HTTP middleware and cannot be used inside the RabbitMQ consumer. Consumer
-message validation is done with plain JavaScript checks in `src/consumer/eventHandler.js`. If
+message validation is done with plain JavaScript checks in `src/consumer/event-handler.js`. If
 validation fails, immediately `nack(false, false)` to DLQ — do not process further.
 
 Every event envelope must have:
@@ -249,30 +282,70 @@ const pageQueryValidator = query('page')
     .isInt({ min: 1 }).withMessage('Page must be a positive integer.');
 ```
 
+The full set exported by `notification-validators.js`: `statusQueryValidator`,
+`eventTypeQueryValidator`, `startDateQueryValidator`, `endDateQueryValidator`, `pageQueryValidator`,
+`pageSizeQueryValidator` (capped at 100).
+
 The `handleBadRequests(errorMessage)` helper from `exception-handler.js` is placed in middleware
 arrays after `express-validator` chains, exactly as in expense-tracker.
+
+> **Path params are validated in the controller, not by middleware.** `:eventId` is checked with
+> `isUuid(eventId)` inside `getOne` / `replay`, which call `next(new BadRequest(...))` on a malformed
+> UUID. Only query params go through `express-validator` chains.
 
 ---
 
 ## Idempotency Pattern
 
-Before any processing, check whether `eventId` already exists in `notification_log`. If it does, ack
-and skip — do not send a duplicate email.
+Before any processing, look up `eventId` in `notification_log`. **Finding an existing row is not on
+its own a reason to skip** — the decision depends on that row's `status`, because the same `eventId`
+legitimately comes back around in three different situations: a producer duplicate, an internal retry,
+and an operator-triggered replay.
 
 ```js
-// In eventHandler.js, before doing anything else:
+// In event-handler.js, before doing anything else:
 const existing = await notificationRepository.findLogByEventId(eventId);
+
 if (existing) {
-    logger.warn({ eventId }, 'Duplicate event received — skipping');
-    channel.ack(msg);
-    return;
+    if (existing.status === 'sent') {
+        // Already delivered — a true duplicate. Never send a second email.
+        logger.warn({ eventId }, 'Duplicate event received — already delivered, skipping');
+        channel.ack(msg);
+        return;
+    }
+    if (retryCount === 0 && existing.status === 'pending') {
+        // Another delivery of a message already in flight — skip to avoid double-sending.
+        logger.warn({ eventId }, 'Duplicate event received — already pending, skipping');
+        channel.ack(msg);
+        return;
+    }
+    // status === 'failed' (replay) or retryCount > 0 (retry) — fall through and reprocess.
+    log = existing;
+    await notificationRepository.updateLog(log.id, { retryCount });
+} else {
+    log = await notificationRepository.createLog({
+        eventId, eventType, recipientEmail, recipientName, status: 'pending', payload,
+    });
 }
 
-// Create pending record first, then attempt delivery
-const log = await notificationRepository.createLog({ eventId, eventType, recipientEmail, status: 'pending' });
 // On success: notificationRepository.updateLog(log.id, { status: 'sent', processedAt: new Date() })
 // On failure: notificationRepository.updateLog(log.id, { status: 'failed', failureReason: err.message })
 ```
+
+| Existing row | `retryCount` | Action |
+| --- | --- | --- |
+| none | — | Create a `pending` row (storing `payload`) and process |
+| `sent` | any | Ack and skip — true duplicate, already delivered |
+| `pending` | `0` | Ack and skip — already in flight |
+| `pending` | `> 0` | Reprocess — this is a retry of the in-flight message |
+| `failed` | any | **Reprocess** — this is a replay |
+
+> **Do not "simplify" this back to a bare `if (existing) { ack; return; }`.** Skipping on any existing
+> row silently breaks `POST /api/v1/notifications/replay/:eventId`: the replayed message is acked and
+> discarded, and the log row stays `failed` forever with no indication anything went wrong.
+
+**Store the full `payload`** when creating the row. It is what makes replay possible — see
+[Replay Contract](#replay-contract).
 
 ---
 
@@ -298,6 +371,7 @@ const NotificationLog = sequelize.define('NotificationLog', {
     failureReason:  { type: DataTypes.TEXT, allowNull: true },
     retryCount:     { type: DataTypes.SMALLINT, allowNull: false, defaultValue: 0 },
     processedAt:    { type: DataTypes.DATE, allowNull: true },
+    payload:        { type: DataTypes.JSONB, allowNull: true },
 }, {
     tableName: 'notification_log',
     indexes: [
@@ -309,6 +383,15 @@ const NotificationLog = sequelize.define('NotificationLog', {
 
 module.exports = { NotificationLog };
 ```
+
+**`tableName: 'notification_log'` is load-bearing.** Sequelize auto-pluralizes model names, so without
+this explicit override it queries `notification_logs` — which the migration never creates. The
+resulting `relation "notification_logs" does not exist` surfaces through Jest as a blank error
+message, which is very hard to trace. Never remove it.
+
+**`payload` stores the original event payload** exactly as it arrived, so a failed notification can be
+replayed later with its full context. It is nullable because rows created before the column existed
+have none.
 
 ### Model Field Format
 
@@ -350,8 +433,10 @@ review; there is no automated lint rule for it.
 const notificationRepository = require('../../repositories/notification-repository');
 
 await notificationRepository.findLogByEventId(eventId);
-await notificationRepository.createLog({ eventId, eventType, recipientEmail, status: 'pending' });
+await notificationRepository.createLog({ eventId, eventType, recipientEmail, status: 'pending', payload });
 await notificationRepository.updateLog(id, { status: 'sent', processedAt: new Date() });
+await notificationRepository.findAllLogs({ status, eventType, startDate, endDate, page, pageSize });
+await notificationRepository.getStats({ startDate, endDate });
 ```
 
 ---
@@ -376,9 +461,26 @@ must fail fast and not start.
 - **Plain-text fallback** — always pass a `text` option to Nodemailer (can be auto-stripped HTML).
 - **Standard footer** — every template includes app name, "You received this because..." and an
   unsubscribe placeholder link.
-- **QR attachment** — `ticketPurchased.js` generates a QR PNG from `ticketCode` using the `qrcode`
+- **QR attachment** — `ticket-purchased.js` generates a QR PNG from `ticketCode` using the `qrcode`
   package and passes it as a Nodemailer attachment. If QR generation fails, send the email without the
   attachment and log a warning — do not fail the entire delivery.
+
+### Sender Signature
+
+`sendEmail` takes a **single options object**, not positional arguments, and derives the plain-text
+fallback itself by stripping tags from the HTML. Handlers never pass `text` or `from`.
+
+```js
+// src/email/sender.js
+const sendEmail = async ({ to, subject, html, attachments = [] }) => { ... };
+
+// calling it from a handler
+const info = await sender.sendEmail({
+    to: payload.email,
+    subject: `Welcome to ${config.app.APP_NAME}, ${payload.name}!`,
+    html,
+});
+```
 
 ### Renderer Pattern
 
@@ -439,10 +541,30 @@ All HTTP responses use the same `ApiResponse` shape from `src/utils/responses.js
 | Code | When Used |
 | --- | --- |
 | `200 OK` | Successful read |
-| `400 Bad Request` | Invalid query params |
+| `400 Bad Request` | Invalid query params, malformed `:eventId`, or replay with no stored payload |
 | `404 Not Found` | `eventId` does not exist in the log |
 | `409 Conflict` | Replay attempted on a non-failed notification |
 | `500 Internal Server Error` | Unhandled exception |
+
+### Replay Contract
+
+`POST /api/v1/notifications/replay/:eventId` does **not** send an email itself. It re-publishes the
+original event to `app.events` and lets the normal consumer path handle delivery, which keeps all
+send/retry/logging logic in one place.
+
+Order of checks in the controller:
+
+1. `:eventId` is not a valid UUID → `400`
+2. No log row for that `eventId` → `404`
+3. Row exists but `status !== 'failed'` → `409` (only failed notifications are replayable)
+4. Row has no stored `payload` → `400` (predates the `payload` column; nothing to replay with)
+5. Otherwise → re-publish `{ eventId, eventType, timestamp: now, payload: log.payload }` to
+   `EXCHANGE_NAME` with the log's `eventType` as the routing key, `{ persistent: true }`, and return `200`
+
+The response means *queued*, not *delivered* — the status transitions to `sent` only once the consumer
+processes it. Reuse the **original `eventId`**; the consumer's `failed`-status passthrough (see
+[Idempotency Pattern](#idempotency-pattern)) is what lets it through. Never mint a fresh `eventId` to
+dodge the idempotency check — that creates an orphan row and leaves the original stuck at `failed`.
 
 ---
 
@@ -473,6 +595,10 @@ module.exports = { serializeNotification, serializeNotificationList };
 
 **Controllers only** — serializers are called exclusively from controllers, via namespace import.
 
+> **`payload` is deliberately not serialized.** The stored event payload is internal state for replay,
+> not part of the API contract — it can hold arbitrary producer-supplied fields. Do not add it to
+> `serializeNotification`.
+
 ---
 
 ## Logging (Pino)
@@ -480,10 +606,35 @@ module.exports = { serializeNotification, serializeNotificationList };
 Use `pino` for all logging. Every log entry is a JSON object. Never use `console.log` in production
 paths.
 
-```js
-const config = require('../configs/config');
-const logger = require('pino')({ level: config.app.LOG_LEVEL || 'info' });
+**Import the shared logger — never construct a new Pino instance.** `src/utils/logger.js` exports a
+single configured singleton; every file under `src/` imports it. This keeps one log level and one
+output stream across both entry points.
 
+```js
+// src/utils/logger.js — the only place pino() is called inside src/
+const pino = require('pino');
+const config = require('../configs/config');
+
+const logger = pino({ level: config.app.LOG_LEVEL });
+
+module.exports = logger;
+```
+
+```js
+// every other file under src/ — adjust the relative depth only
+const logger = require('../utils/logger');
+```
+
+```js
+// wrong — do not do this inside src/
+const logger = require('pino')({ level: config.app.LOG_LEVEL });
+```
+
+> **Exception: `scripts/`.** The CLI scripts construct their own `require('pino')({ level: 'info' })`
+> on purpose. They are short-lived operator tools that should log at a fixed level regardless of the
+> service's `LOG_LEVEL`.
+
+```js
 // Successful delivery
 logger.info({ eventId, eventType, recipient: recipientEmail }, 'Email delivered');
 
@@ -507,9 +658,11 @@ include `status`.
 `src/utils/exceptions/custom-exceptions.js` — same pattern as expense-tracker. Only the subset
 relevant to the HTTP management API is needed here.
 
+All extend `AppError`, which carries `statusCode` and `isOperational` and captures a stack trace.
+
 | Class | Status | When to throw |
 | --- | --- | --- |
-| `BadRequest` | 400 | Invalid query params |
+| `BadRequest` | 400 | Invalid query params, malformed `:eventId`, replay with no stored payload |
 | `NotFound` | 404 | `eventId` not in notification log |
 | `Conflict` | 409 | Replay on a non-failed notification |
 
@@ -526,10 +679,14 @@ The consumer entry point (`src/consumer/index.js`) must handle `SIGTERM` and the
 1. Stop accepting new messages (`channel.cancel(consumerTag)`).
 2. Wait for any in-flight message to finish processing.
 3. Close the channel cleanly (`channel.close()`).
-4. Close the AMQP connection (`connection.close()`).
+4. Close the AMQP connection — `await getConnection()?.close()`.
 5. Exit with code `0`.
 
 No message should be left in an un-acked state after a clean shutdown.
+
+> **Use `getConnection()` for step 4, not `getChannel()`.** `rabbitmq.js` exports both; the channel
+> object is not the connection, so reaching for `getChannel().connection` does not close the
+> connection and leaves the socket open.
 
 ---
 
@@ -563,11 +720,11 @@ src/tests/
   setupFilesAfterEnv.js                  # afterAll — closes sequelize connection
   unit/
     handlers/
-      userRegistered.test.js
-      userFollowed.test.js
-      postLiked.test.js
-      postCommented.test.js
-      ticketPurchased.test.js
+      user-registered.test.js
+      user-followed.test.js
+      post-liked.test.js
+      post-commented.test.js
+      ticket-purchased.test.js
   integration/
     api/
       list-notifications.test.js
@@ -579,35 +736,60 @@ src/tests/
 
 ### Unit Test Pattern (Handler)
 
+Handlers import `sender` and `renderer` at the top of the file, so unit tests mock those **modules**
+with `jest.mock(...)` rather than injecting fakes as arguments.
+
 ```js
-// tests/unit/handlers/userRegistered.test.js
-describe('userRegistered handler', () => {
-    let mockSender, mockRenderer, mockLog;
+// src/tests/unit/handlers/user-registered.test.js
+jest.mock('../../../email/sender');
+jest.mock('../../../email/renderer');
+jest.mock('../../../repositories/notification-repository');
 
-    beforeEach(() => {
-        mockRenderer = { render: jest.fn().mockReturnValue('<html>...</html>') };
-        mockSender = { sendEmail: jest.fn().mockResolvedValue({ messageId: 'abc' }) };
-        mockLog = { id: 'log-uuid' };
-    });
+const sender = require('../../../email/sender');
+const renderer = require('../../../email/renderer');
+const notificationRepository = require('../../../repositories/notification-repository');
+const { handle } = require('../../../consumer/handlers/user-registered');
 
-    it('should call renderer with correct template and context', async () => { ... });
-    it('should call sender with correct to, subject, and html', async () => { ... });
-    it('should propagate errors thrown by sender', async () => { ... });
+beforeEach(() => {
+    jest.clearAllMocks();
+    renderer.render.mockReturnValue('<html>welcome</html>');
+    sender.sendEmail.mockResolvedValue({ messageId: 'msg-001' });
+    notificationRepository.updateLog.mockResolvedValue();
+});
+
+describe('user-registered handler', () => {
+    it('calls renderer with the welcome template and correct context', async () => { ... });
+    it('calls sender with the correct recipient, subject, and html', async () => { ... });
+    it('updates the log to sent after successful delivery', async () => { ... });
+    it('propagates errors thrown by sender', async () => { ... });
+    it('does not propagate errors thrown by updateLog after delivery', async () => { ... });
 });
 ```
 
+The last case encodes the **delivery > logging** rule: a `updateLog` rejection after the email is
+already out must not bubble up, because that would trigger a retry and send a duplicate.
+
 ### Integration Test Pattern (HTTP API)
 
+Integration tests import `src/app.js` directly — it opens no connections, so no server is started and
+no AMQP connection is needed. Seeding and cleanup live **inside the `describe` block**, never at file
+root, so they cannot race with root-level hooks in `setupFilesAfterEnv.js`.
+
 ```js
-// tests/integration/api/list-notifications.test.js
+// src/tests/integration/api/list-notifications.test.js
+const request = require('supertest');
+const app = require('../../../app');
+const { NotificationLog } = require('../../../models/notification-log');
+
 describe('GET /api/v1/notifications', () => {
+    let seededLog;
 
     beforeAll(async () => {
         // Seed NotificationLog rows directly using the model (test setup only)
     });
 
     afterAll(async () => {
-        await NotificationLog.destroy({ where: { eventType: 'user.registered' }, force: true });
+        await NotificationLog.destroy({ where: { id: seededLog.id } });
     });
 
     it('should return 200 with paginated notification list', async () => { ... });
@@ -616,6 +798,20 @@ describe('GET /api/v1/notifications', () => {
     it('should call next() with an error if any exception is thrown', async () => { ... });
 });
 ```
+
+Endpoints that publish to RabbitMQ (replay) mock the config module at the top of the file, since no
+broker runs during tests:
+
+```js
+jest.mock('../../../configs/rabbitmq', () => ({
+    connect: jest.fn(),
+    getChannel: jest.fn(),
+    getConnection: jest.fn(),
+}));
+```
+
+**Seed a `payload` on any row you intend to replay** — the replay endpoint returns `400` when
+`payload` is null, so a row seeded without one cannot reach the `200` path.
 
 ### `setup.js`
 
@@ -626,6 +822,19 @@ await execPromise('NODE_ENV=test npx sequelize-cli db:migrate');
 ```
 
 `NODE_ENV=test` is mandatory — without it, the CLI migrates the wrong database.
+
+### Test Script
+
+```json
+"test": "NODE_ENV=test jest --forceExit"
+```
+
+Both flags are load-bearing:
+
+- **`NODE_ENV=test`** — Jest workers are separate processes. Without it they read the `development`
+  config and run the suite against the dev database.
+- **`--forceExit`** — integration tests hold live Sequelize pool connections. Without it the run hangs
+  after the last test instead of exiting.
 
 ### `setupFilesAfterEnv.js`
 
@@ -646,6 +855,16 @@ log = await NotificationLog.create({
     recipientEmail: faker.internet.email(),
     status: 'sent',
     processedAt: new Date(),
+});
+
+// a row intended for replay also needs a payload
+failedLog = await NotificationLog.create({
+    eventId: faker.string.uuid(),
+    eventType: 'user.registered',
+    recipientEmail: faker.internet.email(),
+    status: 'failed',
+    failureReason: 'SMTP timeout',
+    payload: { email: faker.internet.email(), name: faker.person.firstName() },
 });
 ```
 
@@ -688,14 +907,32 @@ disconnects cleanly.
 
 ## Environment Variables
 
-All env vars are validated and exported by `src/config/env.js`. No other file reads `process.env`
+All env vars are read and exported by `src/configs/config.js`. No other file reads `process.env`
 directly.
+
+`config.js` exports two different shapes from one module:
+
+- **Top-level environment keys** (`development`, `test`, `staging`, `production`) — consumed by
+  `sequelize-cli` and `src/configs/sequelize.js`. These hold the database connection fields only.
+- **`config.app`** — everything else the application reads: `config.app.PORT`,
+  `config.app.EXCHANGE_NAME`, and so on.
+
+Database connection is configured from discrete `POSTGRES_*` variables, **not** a single
+`DATABASE_URL`.
 
 | Variable | Description | Example |
 | --- | --- | --- |
 | `NODE_ENV` | Environment | `development` |
 | `PORT` | HTTP API port | `3001` |
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@localhost:5432/notifications_db` |
+| `LOG_LEVEL` | Pino log level | `info` |
+| `POSTGRES_HOST` | PostgreSQL host | `postgres-dev` |
+| `POSTGRES_PORT` | PostgreSQL port | `5432` |
+| `POSTGRES_USER` | PostgreSQL user | `user` |
+| `POSTGRES_PASSWORD` | PostgreSQL password | `password` |
+| `POSTGRES_DATABASE` | Main database name | `notifications_db` |
+| `POSTGRES_DATABASE_TEST` | Test database name | `notifications_db_test` |
+| `DEFAULT_PAGE` | Default page for list endpoints | `1` |
+| `DEFAULT_PAGE_SIZE` | Default page size for list endpoints | `10` |
 | `AMQP_URL` | RabbitMQ connection string | `amqp://guest:guest@localhost:5672` |
 | `EXCHANGE_NAME` | Topic exchange name | `app.events` |
 | `QUEUE_NAME` | Consumer queue | `notifications.queue` |
@@ -711,6 +948,10 @@ directly.
 | `APP_NAME` | App name used in templates | `YourApp` |
 | `APP_URL` | Base URL for template links | `https://yourapp.com` |
 
+> **`POSTGRES_HOST` is a Docker service name.** Inside the `dev-infra` network it resolves to the
+> broker/database containers. Running migrations or scripts from the host instead needs
+> `POSTGRES_HOST=localhost` plus the published port.
+
 ---
 
 ## Useful Commands
@@ -725,13 +966,14 @@ node src/index.js
 # Start everything via Docker
 docker-compose up --build
 
-# Run pending migrations
+# Run pending migrations (add POSTGRES_HOST=localhost when running from the host)
 npx sequelize-cli db:migrate
+NODE_ENV=test npx sequelize-cli db:migrate
 
 # Create a new migration
 npx sequelize-cli migration:generate --name <description>
 
-# Run all tests
+# Run all tests (the script already sets NODE_ENV=test and --forceExit)
 npm test
 
 # Publish a test event (development)
@@ -753,7 +995,7 @@ node scripts/produce-event.js --event user.registered --email your@email.com
 ## Things Agents Must NOT Do
 
 - Add AMQP logic (`channel.ack`, `channel.nack`, `channel.publish`) inside handler files — those
-  belong in `consumer/eventHandler.js` or `consumer/index.js`.
+  belong in `consumer/event-handler.js` or `consumer/index.js`.
 - Call `nodemailer` or `amqplib` directly inside handler files — inject `sender` and `renderer`.
 - Read `process.env` directly in handlers, controllers, or repositories — use `src/configs/config.js`.
 - Import or query a Sequelize model from anywhere other than a `src/repositories/` file.
@@ -765,4 +1007,12 @@ node scripts/produce-event.js --event user.registered --email your@email.com
 - Add auth middleware to the HTTP API — this is an internal service, no auth is required.
 - Immediately requeue a message without incrementing `x-retry-count` — this creates a tight loop.
 - Skip the idempotency check — always check `notification_log` for `eventId` before processing.
+- Reduce the idempotency check to "row exists → ack and skip" — branch on `status`, or replay breaks.
 - Start the consumer if any template fails to load at startup — fail fast.
+- Name a file in camelCase — everything under `src/` and `scripts/` is kebab-case.
+- Call `require('pino')(...)` anywhere under `src/` — import `src/utils/logger.js` instead.
+- Remove `tableName: 'notification_log'` from the model — Sequelize then queries a table that does not exist.
+- Declare the DLX as `direct`, or drop the DLQ's `''` binding — dead-lettered messages are lost either way.
+- Drop the `event.#` binding — `event.ticket_purchased` would never reach the consumer.
+- Add `payload` to the serializer — it is internal replay state, not part of the API contract.
+- Mint a fresh `eventId` when replaying — reuse the original.
